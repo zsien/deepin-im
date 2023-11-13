@@ -7,27 +7,32 @@
 
 #include "Xcb.h"
 
+#include <wayland-server-core.h>
+
 class X11ActiveWindowMonitor : public Xcb
 {
-    Q_OBJECT
-
 public:
-    X11ActiveWindowMonitor();
-    ~X11ActiveWindowMonitor();
+    X11ActiveWindowMonitor(wl_event_loop *loop);
+    ~X11ActiveWindowMonitor() override;
 
     xcb_window_t activeWindow();
     pid_t windowPid(xcb_window_t window);
     std::tuple<uint16_t, uint16_t> windowPosition(xcb_window_t window);
 
-signals:
-    void activeWindowChanged(xcb_window_t window);
-
 protected:
     void xcbEvent(const std::unique_ptr<xcb_generic_event_t> &event) override;
+
+public:
+    struct
+    {
+        struct wl_signal activeWindow;
+    } events;
 
 private:
     const std::string atomActiveWindow_;
     const std::string atomWmPid_;
+
+    xcb_window_t currentActiveWindow_;
 };
 
 #endif // !X11ACTIVEWINDOWMONITOR_H

@@ -62,6 +62,7 @@ void InputMethodV2::grabKeyboardNotify(void *data)
     // send modifier state to grab
     wlr_input_method_keyboard_grab_v2_set_keyboard(keyboard_grab, active_keyboard);
 
+    server_->startGrab();
     wl_signal_add(&keyboard_grab->events.destroy, keyboard_grab_destroy_);
 }
 
@@ -72,6 +73,8 @@ void InputMethodV2::destroyNotify(void *data)
 
 void InputMethodV2::keyboardGrabDestroyNotify(void *data)
 {
+    server_->stopGrab();
+
     auto *keyboard_grab = static_cast<wlr_input_method_keyboard_grab_v2 *>(data);
     // wl_list_remove(&input_method_keyboard_grab_destroy_.link);
 

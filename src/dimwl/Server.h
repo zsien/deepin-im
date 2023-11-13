@@ -6,6 +6,7 @@
 #define SERVER_H
 
 #include "Listener.h"
+#include "XcbHelper.h"
 #include "common/common.h"
 
 #include <wayland-server-core.h>
@@ -32,9 +33,17 @@ struct wlr_virtual_keyboard_manager_v1;
 struct wlr_input_method_manager_v2;
 struct wlr_text_input_manager_v3;
 
+class Output;
 class View;
 class InputMethodV2;
 class TextInputV3;
+class X11ActiveWindowMonitor;
+class X11KeyboardGrabber;
+
+enum class SessionType {
+    WL,
+    X11,
+};
 
 class Server
 {
@@ -46,6 +55,8 @@ public:
     void run();
 
     bool startBackend();
+
+    wl_display *display() { return display_.get(); }
 
     wlr_allocator *allocator() { return allocator_.get(); }
 
@@ -65,6 +76,9 @@ public:
 
     void setTextInputFocus(wlr_surface *surface);
 
+    void startGrab();
+    void stopGrab();
+
 private:
     void backendNewOutputNotify(void *data);
     void xdgShellNewSurfaceNotify(void *data);
@@ -81,17 +95,21 @@ private:
     void inputMethodV2DestroyNotify(void *data);
     void textInputManagerV3TextInputNotify(void *data);
     void textInputV3DestroyNotify(void *data);
+    void x11ActiveWindowNotify(void *data);
+    void textInputCursorRectangleNotify(void *data);
+    void grabberKeyNotify(void *data);
 
     void processCursorMotion(uint32_t time);
     View *desktopViewAt(double lx, double ly, struct wlr_surface **surface, double *sx, double *sy);
 
 private:
+    SessionType sessionType_;
     std::unique_ptr<wl_display, Deleter<wl_display_destroy>> display_;
     std::unique_ptr<wlr_backend, Deleter<wlr_backend_destroy>> backend_;
     std::unique_ptr<wlr_renderer, Deleter<wlr_renderer_destroy>> renderer_;
     std::unique_ptr<wlr_allocator, Deleter<wlr_allocator_destroy>> allocator_;
     std::unique_ptr<wlr_output_layout, Deleter<wlr_output_layout_destroy>> output_layout_;
-    wl_list outputs_;
+    Output *output_ = nullptr;
     Listener<&Server::backendNewOutputNotify> backend_new_output_;
 
     std::unique_ptr<wlr_scene> scene_;
@@ -125,6 +143,16 @@ private:
     std::unique_ptr<wlr_text_input_manager_v3> text_input_manager_v3_;
     wl_list text_inputs_;
     Listener<&Server::textInputManagerV3TextInputNotify> text_input_manager_v3_text_input_;
+
+    std::unique_ptr<X11ActiveWindowMonitor> x11ActiveWindowMonitor_;
+    Listener<&Server::x11ActiveWindowNotify> x11ActiveWindow_;
+
+    Listener<&Server::textInputCursorRectangleNotify> textInputCursorRectangle_;
+
+    std::unique_ptr<X11KeyboardGrabber> grabber_;
+    Listener<&Server::grabberKeyNotify> grabberKey_;
+
+    XcbHelper xcb_helper_;
 };
 
 #endif // !SERVER_H

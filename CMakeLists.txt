@@ -33,6 +33,7 @@ endif()
 
 pkg_check_modules(xcb REQUIRED IMPORTED_TARGET xcb)
 pkg_check_modules(xcb-xinput REQUIRED IMPORTED_TARGET xcb-xinput)
+pkg_check_modules(xcb-aux REQUIRED IMPORTED_TARGET xcb-aux)
 pkg_check_modules(xkbcommon REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(xkeyboard-config REQUIRED IMPORTED_TARGET xkeyboard-config)
 pkg_check_modules(wayland-client REQUIRED IMPORTED_TARGET wayland-client)
@@ -58,6 +59,11 @@ if (ENABLE_GTK4_IM_MODULE)
 endif()
 
 add_library(wayland_protocols OBJECT)
+
+ecm_add_wayland_server_protocol(wayland_protocols
+  PROTOCOL ${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml
+  BASENAME xdg-shell
+)
 
 ecm_add_wayland_server_protocol(wayland_protocols
   PROTOCOL misc/wayland-protocols/input-method-unstable-v2.xml

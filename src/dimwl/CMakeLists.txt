@@ -15,8 +15,15 @@ add_executable(dimwl
     InputMethodV2.cpp
     TextInputV3.h
     TextInputV3.cpp
+    XcbHelper.h
+    XcbHelper.cpp
+    Xcb.h
+    Xcb.cpp
+    X11ActiveWindowMonitor.h
+    X11ActiveWindowMonitor.cpp
+    X11KeyboardGrabber.h
+    X11KeyboardGrabber.cpp
 )
-
 
 include(${PROJECT_SOURCE_DIR}/cmake/WaylandScannerHelpers.cmake)
 
@@ -31,6 +38,9 @@ target_link_libraries(dimwl PUBLIC
     PkgConfig::wlroots
     PkgConfig::wayland-server
     PkgConfig::xkbcommon
+    PkgConfig::xcb
+    PkgConfig::xcb-xinput
+    PkgConfig::xcb-aux
 )
 
 install(TARGETS dimwl

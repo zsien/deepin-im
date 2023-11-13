@@ -16,6 +16,7 @@ Build-Depends:
  libwayland-dev,
  libwlroots-dev,
  libxcb-xinput-dev,
+ libxcb-xtest0-dev,
  libxcb1-dev,
  libxkbcommon-dev,
  pkg-config,

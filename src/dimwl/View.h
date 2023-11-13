@@ -19,9 +19,15 @@ class Server;
 
 class View
 {
+    friend class Server;
+
 public:
     View(Server *server, wlr_xdg_surface *xdg_surface, wl_list *list);
     ~View();
+
+    pid_t getPid() const {
+        return pid_;
+    }
 
 private:
     void xdgSurfaceMapNotify(void *data);
@@ -42,6 +48,8 @@ private:
 
     wlr_xdg_toplevel *xdg_toplevel_;
     wlr_scene_tree *scene_tree_;
+
+    pid_t pid_;
 
     Listener<&View::xdgSurfaceMapNotify> xdg_surface_map_;
     Listener<&View::xdgSurfaceUnmapNotify> xdg_surface_unmap_;

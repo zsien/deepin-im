@@ -9,8 +9,14 @@
 #include "Output.h"
 #include "TextInputV3.h"
 #include "View.h"
+#include "X11KeyboardGrabber.h"
+
+#include <xcb/xcb.h>
+#include <xcb/xcb_aux.h>
 
 extern "C" {
+#include <wlr/backend/wayland.h>
+#include <wlr/backend/x11.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #define delete delete_
@@ -19,11 +25,34 @@ extern "C" {
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_text_input_v3.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
+#include <wlr/util/log.h>
 }
+
+#include "X11ActiveWindowMonitor.h"
 
 #include <stdexcept>
 
 #include <assert.h>
+
+struct unsafe_wlr_x11_backend
+{
+    struct wlr_backend backend;
+    struct wl_display *wl_display;
+    bool started;
+
+    xcb_connection_t *xcb;
+    xcb_screen_t *screen;
+    xcb_depth_t *depth;
+};
+
+struct unsafe_wlr_x11_output
+{
+    struct wlr_output wlr_output;
+    struct wlr_x11_backend *x11;
+    struct wl_list link; // wlr_x11_backend::outputs
+
+    xcb_window_t win;
+};
 
 Server::Server()
     : display_(wl_display_create())
@@ -41,10 +70,25 @@ Server::Server()
     , input_method_manager_v2_input_method_(this)
     , input_method_v2_destroy_(this)
     , text_input_manager_v3_text_input_(this)
+    , x11ActiveWindow_(this)
+    , textInputCursorRectangle_(this)
+    , grabberKey_(this)
 {
-    backend_.reset(wlr_backend_autocreate(display_.get()));
+    if (getenv("WAYLAND_DISPLAY") || getenv("WAYLAND_SOCKET")) {
+        sessionType_ = SessionType ::WL;
+        backend_.reset(wlr_wl_backend_create(display_.get(), nullptr));
+        wlr_wl_output_create(backend_.get());
+    } else if (const char *display = getenv("DISPLAY")) {
+        sessionType_ = SessionType ::X11;
+        backend_.reset(wlr_x11_backend_create(display_.get(), display));
+        wlr_x11_output_create(backend_.get());
+
+        unsafe_wlr_x11_backend *x11_backend = wl_container_of(backend_.get(), x11_backend, backend);
+        xcb_helper_.setConnection(x11_backend->xcb);
+    }
+
     if (!backend_) {
-        throw std::runtime_error("failed to create xkb context");
+        throw std::runtime_error("failed to create backend");
     }
 
     renderer_.reset(wlr_renderer_autocreate(backend_.get()));
@@ -76,7 +120,6 @@ Server::Server()
 
     /* Configure a listener to be notified when new outputs are available on the
      * backend. */
-    wl_list_init(&outputs_);
     wl_signal_add(&backend_->events.new_output, backend_new_output_);
 
     /* Create a scene graph. This is a wlroots abstraction that handles all
@@ -154,6 +197,13 @@ Server::Server()
     wl_list_init(&text_inputs_);
     text_input_manager_v3_.reset(wlr_text_input_manager_v3_create(display_.get()));
     wl_signal_add(&text_input_manager_v3_->events.text_input, text_input_manager_v3_text_input_);
+
+    if (sessionType_ == SessionType::X11) {
+        struct wl_event_loop *loop = wl_display_get_event_loop(display_.get());
+        x11ActiveWindowMonitor_ = std::make_unique<X11ActiveWindowMonitor>(loop);
+
+        wl_signal_add(&x11ActiveWindowMonitor_->events.activeWindow, x11ActiveWindow_);
+    }
 }
 
 Server::~Server() = default;
@@ -189,18 +239,42 @@ void Server::setTextInputFocus(wlr_surface *surface)
     }
 }
 
+void Server::startGrab()
+{
+    unsafe_wlr_x11_output *x11_output = wl_container_of(output_->output_, x11_output, wlr_output);
+    grabber_.reset(new X11KeyboardGrabber(wl_display_get_event_loop(display_.get())));
+    wl_signal_add(&grabber_->events.key, grabberKey_);
+}
+
+void Server::stopGrab()
+{
+    grabber_.reset();
+}
+
 void Server::backendNewOutputNotify(void *data)
 {
     /* This event is raised by the backend when a new output (aka a display or
      * monitor) becomes available. */
-    struct wlr_output *wlr_output = static_cast<struct wlr_output *>(data);
+    assert(output_ == nullptr);
+    struct wlr_output *output = static_cast<struct wlr_output *>(data);
 
-    if (!wl_list_empty(&wlr_output->modes)) {
-        struct wlr_output_mode *mode = wl_container_of(wlr_output->modes.prev, mode, link);
-        wlr_output_set_mode(wlr_output, mode);
+    if (sessionType_ == SessionType::X11) {
+        wlr_x11_output_set_title(output, "");
+        wlr_output_set_custom_mode(output, 200, 60, 0);
+
+        unsafe_wlr_x11_output *x11_output = wl_container_of(output, x11_output, wlr_output);
+
+        xcb_helper_.deleteProperty(x11_output->win, "WM_STATE");
+        xcb_helper_.deleteProperty(x11_output->win, "_NET_WM_STATE");
+        xcb_helper_.setPropertyAtoms(x11_output->win,
+                                     "_NET_WM_ALLOWED_ACTIONS",
+                                     { "_NET_WM_ACTION_ABOVE" });
+        xcb_helper_.setPropertyAtom(x11_output->win,
+                                    "_NET_WM_WINDOW_TYPE",
+                                    "_NET_WM_WINDOW_TYPE_POPUP_MENU");
     }
 
-    auto *output = new Output(this, wlr_output, &outputs_);
+    output_ = new Output(this, output);
 }
 
 void Server::xdgShellNewSurfaceNotify(void *data)
@@ -357,7 +431,54 @@ void Server::inputMethodV2DestroyNotify(void *data)
 void Server::textInputManagerV3TextInputNotify(void *data)
 {
     auto *ti3 = static_cast<wlr_text_input_v3 *>(data);
-    new TextInputV3(this, ti3, &text_inputs_);
+    auto *client = wl_resource_get_client(ti3->resource);
+
+    auto *textInput = new TextInputV3(this, ti3, &text_inputs_);
+    wl_signal_add(&textInput->events.cursorRectangle, textInputCursorRectangle_);
+}
+
+void Server::textInputV3DestroyNotify(void *data) { }
+
+void Server::x11ActiveWindowNotify(void *data)
+{
+    xcb_window_t win = *static_cast<xcb_window_t *>(data);
+
+    pid_t pid = x11ActiveWindowMonitor_->windowPid(win);
+
+    View *view = nullptr;
+    wl_list_for_each(view, &views_, link_)
+    {
+        if (view->getPid() == pid) {
+            view->focusView();
+        }
+    }
+}
+
+void Server::textInputCursorRectangleNotify(void *data)
+{
+    auto *rectangle = static_cast<wlr_box *>(data);
+
+    if (sessionType_ == SessionType::X11) {
+        auto [x, y] =
+            x11ActiveWindowMonitor_->windowPosition(x11ActiveWindowMonitor_->activeWindow());
+
+        unsafe_wlr_x11_output *x11_output =
+            wl_container_of(output_->output_, x11_output, wlr_output);
+        xcb_params_configure_window_t wc;
+        wc.x = x + rectangle->x + rectangle->height;
+        wc.y = y + rectangle->y + rectangle->width;
+        wc.stack_mode = XCB_STACK_MODE_ABOVE;
+        xcb_helper_.auxConfigureWindow(x11_output->win,
+                                       XCB_CONFIG_WINDOW_STACK_MODE | XCB_CONFIG_WINDOW_X
+                                           | XCB_CONFIG_WINDOW_Y,
+                                       &wc);
+        xcb_helper_.flush();
+    }
+}
+
+void Server::grabberKeyNotify(void *data) {
+    auto *ev = static_cast<GrabberKeyEvent *>(data);
+    
 }
 
 void Server::processCursorMotion(uint32_t time)
